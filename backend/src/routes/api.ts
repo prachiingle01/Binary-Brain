@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import authRoutes from './authRoutes';
+import userRoutes from './userRoutes';
 import productRoutes from './productRoutes';
+import categoryRoutes from './categoryRoutes';
 import cartRoutes from './cartRoutes';
 import orderRoutes from './orderRoutes';
 import inventoryRoutes from './inventoryRoutes';
@@ -22,9 +24,9 @@ router.get('/health', (req, res) => {
 
 // Mount Sub-Routers
 router.use('/auth', authRoutes);
-router.use('/users', authRoutes); // User management alias
+router.use('/users', userRoutes);
+router.use('/categories', categoryRoutes);
 router.use('/products', productRoutes);
-router.use('/categories', productRoutes); // Category alias
 router.use('/cart', cartRoutes);
 router.use('/orders', orderRoutes);
 router.use('/inventory', inventoryRoutes);

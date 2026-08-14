@@ -1,9 +1,5 @@
 import { Router } from 'express';
 import {
-  getCategories,
-  createCategory,
-  updateCategory,
-  deleteCategory,
   getProducts,
   getProductById,
   createProduct,
@@ -14,17 +10,10 @@ import { authenticateToken, requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
-// Category Routes
-router.get('/categories', getCategories);
-router.post('/categories', authenticateToken, requireAdmin, createCategory);
-router.put('/categories/:id', authenticateToken, requireAdmin, updateCategory);
-router.delete('/categories/:id', authenticateToken, requireAdmin, deleteCategory);
-
-// Product Routes
-router.get('/products', getProducts);
-router.get('/products/:id', getProductById);
-router.post('/products', authenticateToken, requireAdmin, createProduct);
-router.put('/products/:id', authenticateToken, requireAdmin, updateProduct);
-router.delete('/products/:id', authenticateToken, requireAdmin, deleteProduct);
+router.get('/', getProducts);
+router.get('/:id', getProductById);
+router.post('/', authenticateToken, requireAdmin, createProduct);
+router.put('/:id', authenticateToken, requireAdmin, updateProduct);
+router.delete('/:id', authenticateToken, requireAdmin, deleteProduct);
 
 export default router;

@@ -71,7 +71,7 @@ describe('Binary-Brain Enterprise E-Commerce API Test Suite', () => {
       const adminToken = adminLogin.body.token;
 
       const res = await request(app)
-        .get('/api/users/users')
+        .get('/api/users')
         .set('Authorization', `Bearer ${adminToken}`);
 
       expect(res.status).toBe(200);
@@ -85,7 +85,7 @@ describe('Binary-Brain Enterprise E-Commerce API Test Suite', () => {
   // ---------------------------------------------------------------------------
   describe('Product & Category APIs', () => {
     it('GET /api/categories should return all categories with product counts', async () => {
-      const res = await request(app).get('/api/categories/categories');
+      const res = await request(app).get('/api/categories');
       expect(res.status).toBe(200);
       expect(res.body.categories.length).toBeGreaterThan(0);
       expect(res.body.categories[0].productCount).toBeDefined();
