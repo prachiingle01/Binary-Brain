@@ -1,102 +1,103 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { Server as HTTPServer } from 'http';
-import { aiAgentEngine } from './aiAgent';
-import { store } from '../db/store';
+import { Order, Product } from '../db/models';
+import { executeAgentQuery } from './aiAgent';
 
-export function setupWebSocket(httpServer: HTTPServer) {
-  const io = new SocketIOServer(httpServer, {
+let ioInstance: SocketIOServer | null = null;
+
+export function initWebSocketServer(httpServer: HTTPServer): SocketIOServer {
+  ioInstance = new SocketIOServer(httpServer, {
     cors: {
       origin: '*',
-      methods: ['GET', 'POST']
+      methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE']
     }
   });
 
-  // Listen to store events and broadcast order status updates
-  store.on('orderUpdated', (eventData) => {
-    const { order, oldStatus, newStatus } = eventData;
-    
-    // Broadcast to order specific room and to global stream
-    io.to(`order_${order.orderId}`).emit('order:status_changed', {
-      orderId: order.orderId,
-      oldStatus,
-      newStatus,
-      order,
-      timestamp: new Date().toISOString()
+  ioInstance.on('connection', (socket: Socket) => {
+    console.log(`🔌 Client connected via Socket.IO: ${socket.id}`);
+
+    // Join specific order tracking room
+    socket.on('join_order_room', (orderId: string) => {
+      socket.join(`order_${orderId}`);
+      console.log(`📦 Socket ${socket.id} joined tracking room: order_${orderId}`);
     });
 
-    io.emit('notification:push', {
-      id: `notif_${Date.now()}`,
-      title: `Order Status Update: ${order.orderId}`,
-      message: `Order #${order.orderId} moved from '${oldStatus}' to '${newStatus}'.`,
-      type: 'order_status',
-      orderId: order.orderId,
-      timestamp: new Date().toLocaleTimeString()
-    });
-  });
-
-  io.on('connection', (socket: Socket) => {
-    console.log(`[WebSocket] Client connected: ${socket.id}`);
-
-    // Join room for order notifications
-    socket.on('order:subscribe', (orderId: string) => {
-      const room = `order_${orderId.toUpperCase()}`;
-      socket.join(room);
-      console.log(`[WebSocket] Client ${socket.id} subscribed to room: ${room}`);
+    // Join admin telemetry room
+    socket.on('join_admin_room', () => {
+      socket.join('admin_channel');
+      console.log(`⚙️ Socket ${socket.id} joined admin telemetry room.`);
     });
 
-    // Real-time Chat Handler
-    socket.on('chat:message', async (data: { message: string; messageId?: string }) => {
-      const userMsg = data.message || '';
-      console.log(`[WebSocket] Received chat message from ${socket.id}: "${userMsg}"`);
-
-      // Emit typing indicator
-      socket.emit('chat:typing', { isTyping: true });
-
+    // Real-Time AI Chat over WebSocket
+    socket.on('ai_query', async (data: { query: string; context?: any }) => {
       try {
-        // Emit tool execution step preview
-        setTimeout(() => {
-          socket.emit('chat:tool_step', {
-            step: 'ANALYZING_INTENT',
-            description: 'Analyzing natural language query & matching backend tool signature...'
-          });
-        }, 200);
-
-        // Process message via AI Agent engine
-        const agentResult = await aiAgentEngine.processUserMessage(userMsg);
-
-        // Emit tool completion step
-        if (agentResult.toolCallsExecuted.length > 0) {
-          socket.emit('chat:tool_step', {
-            step: 'TOOL_EXECUTED',
-            toolCalls: agentResult.toolCallsExecuted,
-            description: `Successfully executed tool calls: ${agentResult.toolCallsExecuted.map(t => t.toolName).join(', ')}`
-          });
-        }
-
-        // Send final response payload
-        setTimeout(() => {
-          socket.emit('chat:typing', { isTyping: false });
-          socket.emit('chat:response', {
-            messageId: data.messageId || `msg_${Date.now()}`,
-            userMessage: userMsg,
-            response: agentResult,
-            timestamp: new Date().toISOString()
-          });
-        }, 500);
-
-      } catch (error: any) {
-        socket.emit('chat:typing', { isTyping: false });
-        socket.emit('chat:error', {
-          error: 'Failed to process AI chat request.',
-          details: error?.message || 'Unknown error'
+        socket.emit('ai_typing', { status: true });
+        const response = await executeAgentQuery(data.query, data.context);
+        socket.emit('ai_typing', { status: false });
+        socket.emit('ai_response', response);
+      } catch (err: any) {
+        socket.emit('ai_typing', { status: false });
+        socket.emit('ai_response', {
+          reply: `An error occurred while processing your request: ${err.message}`,
+          toolExecuted: null,
+          toolOutput: null
         });
       }
     });
 
     socket.on('disconnect', () => {
-      console.log(`[WebSocket] Client disconnected: ${socket.id}`);
+      console.log(`🔌 Client disconnected: ${socket.id}`);
     });
   });
 
-  return io;
+  return ioInstance;
+}
+
+export function getIO(): SocketIOServer | null {
+  return ioInstance;
+}
+
+// Broadcast Helpers
+export function broadcastOrderCreated(order: Order) {
+  if (!ioInstance) return;
+  ioInstance.emit('order:created', order);
+  ioInstance.to('admin_channel').emit('admin:new_order', order);
+}
+
+export function broadcastOrderStatus(order: Order) {
+  if (!ioInstance) return;
+  ioInstance.to(`order_${order.id}`).emit('order:status_updated', order);
+  ioInstance.emit('order:status_updated', order);
+  ioInstance.to('admin_channel').emit('admin:order_updated', order);
+}
+
+export function broadcastOrderCancelled(order: Order) {
+  if (!ioInstance) return;
+  ioInstance.to(`order_${order.id}`).emit('order:cancelled', order);
+  ioInstance.emit('order:cancelled', order);
+  ioInstance.to('admin_channel').emit('admin:order_cancelled', order);
+}
+
+export function broadcastInventoryAlert(product: Product) {
+  if (!ioInstance) return;
+  ioInstance.to('admin_channel').emit('inventory:low_stock', {
+    productId: product.id,
+    name: product.name,
+    stock: product.stock,
+    minStockThreshold: product.minStockThreshold,
+    message: `⚠️ Low Stock Warning: "${product.name}" has only ${product.stock} units left.`
+  });
+  ioInstance.emit('inventory:stock_updated', product);
+}
+
+export function broadcastRestock(product: Product, amount: number) {
+  if (!ioInstance) return;
+  ioInstance.to('admin_channel').emit('inventory:restocked', {
+    productId: product.id,
+    name: product.name,
+    addedAmount: amount,
+    newStock: product.stock,
+    message: `⚡ Restock Triggered: Added ${amount} units to "${product.name}". New stock: ${product.stock}`
+  });
+  ioInstance.emit('inventory:stock_updated', product);
 }

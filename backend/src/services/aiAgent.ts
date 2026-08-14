@@ -1,205 +1,168 @@
-import { store } from '../db/store';
-import { Product, Order, STORE_POLICIES } from '../config/seedData';
+import { db } from '../db/database';
+import { Product, Order } from '../db/models';
+import { broadcastOrderCancelled } from './websocket';
 
-export interface ToolCallExecution {
-  toolName: string;
-  parameters: Record<string, any>;
-  resultSummary: string;
+export interface AgentResult {
+  reply: string;
+  toolExecuted: string | null;
+  toolOutput: any;
+  confidence: number;
 }
 
-export interface AgentResponse {
-  text: string;
-  intent: 'ORDER_LOOKUP' | 'PRODUCT_SEARCH' | 'RECOMMENDATION' | 'ORDER_UPDATE' | 'STORE_POLICY' | 'GENERAL';
-  toolCallsExecuted: ToolCallExecution[];
-  payload?: {
-    products?: Product[];
-    order?: Order;
-    orders?: Order[];
-    recommendations?: Product[];
-    policy?: typeof STORE_POLICIES;
-  };
-}
+export async function executeAgentQuery(query: string, context?: any): Promise<AgentResult> {
+  const q = query.trim().toLowerCase();
 
-export class AIAgentEngine {
-  async processUserMessage(userMessage: string): Promise<AgentResponse> {
-    const text = userMessage.toLowerCase().trim();
-    const toolCalls: ToolCallExecution[] = [];
+  // 1. ORDER CANCELLATION TOOL
+  if (
+    (q.includes('cancel') || q.includes('stop order') || q.includes('abort order')) &&
+    (q.match(/ord-\d+/i) || q.match(/\b\d{4}\b/))
+  ) {
+    const orderMatch = query.match(/ORD-\d+/i) || query.match(/\b\d{4}\b/);
+    const orderId = orderMatch ? (orderMatch[0].startsWith('ORD-') ? orderMatch[0].toUpperCase() : `ORD-${orderMatch[0]}`) : '';
 
-    // 1. ORDER LOOKUP INTENT DETECTOR
-    const orderIdMatch = text.match(/(ord-\d+|\b100[1-9]\b|\border\s+#?\s*([a-z0-9-]+))/i);
-    const isOrderQuery = text.includes('order') || text.includes('track') || text.includes('package') || text.includes('delivery') || text.includes('where is my');
+    try {
+      const { order, refund } = await db.cancelOrder(orderId, 'Cancelled via Autonomous AI Agent');
+      broadcastOrderCancelled(order);
 
-    if (orderIdMatch || (isOrderQuery && (text.includes('1001') || text.includes('1002') || text.includes('1003') || text.includes('status')))) {
-      let rawOrderId = orderIdMatch ? (orderIdMatch[1] || orderIdMatch[2]) : '';
-      if (!rawOrderId && text.includes('1001')) rawOrderId = 'ORD-1001';
-      if (!rawOrderId && text.includes('1002')) rawOrderId = 'ORD-1002';
-      if (!rawOrderId && text.includes('1003')) rawOrderId = 'ORD-1003';
-
-      if (rawOrderId) {
-        if (!rawOrderId.toUpperCase().startsWith('ORD-')) {
-          rawOrderId = `ORD-${rawOrderId.replace(/^#/, '')}`;
-        }
-        
-        // Execute Tool 1: lookupOrder API
-        toolCalls.push({
-          toolName: 'lookupOrder',
-          parameters: { orderId: rawOrderId },
-          resultSummary: `Invoked store.getOrderById('${rawOrderId}')`
-        });
-
-        const order = store.getOrderById(rawOrderId);
-        if (order) {
-          const itemsList = order.items.map(i => `${i.quantity}x ${i.productName}`).join(', ');
-          const completedSteps = order.trackingHistory.filter(s => s.completed).map(s => s.status).join(' ➔ ');
-
-          return {
-            text: `📦 **Order Found: ${order.orderId}**\n\n- **Status:** \`${order.status}\` (${order.carrier})\n- **Customer:** ${order.customerName}\n- **Tracking Number:** \`${order.trackingNumber}\`\n- **Estimated Delivery:** ${order.estimatedDelivery}\n- **Items:** ${itemsList}\n\n**Current Progress:** ${completedSteps}`,
-            intent: 'ORDER_LOOKUP',
-            toolCallsExecuted: toolCalls,
-            payload: { order }
-          };
-        } else {
-          return {
-            text: `🔍 I searched our order database for **${rawOrderId}**, but couldn't find an active order matching that ID. Please double-check your order number (e.g., ORD-1001, ORD-1002, ORD-1003).`,
-            intent: 'ORDER_LOOKUP',
-            toolCallsExecuted: toolCalls
-          };
-        }
-      } else {
-        // Customer name search fallback
-        const orders = store.getAllOrders();
-        return {
-          text: `📦 You can track any order by providing your Order ID (such as **ORD-1001** or **ORD-1002**). Here are sample orders available in your account mock environment:`,
-          intent: 'ORDER_LOOKUP',
-          toolCallsExecuted: toolCalls,
-          payload: { orders }
-        };
-      }
-    }
-
-    // 2. ORDER STATUS UPDATE INTENT (ADMIN / SIMULATION)
-    if ((text.includes('update') || text.includes('change') || text.includes('mark')) && text.includes('order')) {
-      const targetIdMatch = text.match(/(ord-\d+|\b100[1-9]\b)/i);
-      let statusTarget: Order['status'] | null = null;
-      if (text.includes('shipped')) statusTarget = 'Shipped';
-      else if (text.includes('delivered')) statusTarget = 'Delivered';
-      else if (text.includes('processing')) statusTarget = 'Processing';
-      else if (text.includes('out for delivery')) statusTarget = 'Out for Delivery';
-      else if (text.includes('cancelled') || text.includes('cancel')) statusTarget = 'Cancelled';
-
-      if (targetIdMatch && statusTarget) {
-        let orderId = targetIdMatch[0].toUpperCase();
-        if (!orderId.startsWith('ORD-')) orderId = `ORD-${orderId}`;
-
-        // Execute Tool 2: updateOrderStatus API
-        toolCalls.push({
-          toolName: 'updateOrderStatus',
-          parameters: { orderId, status: statusTarget },
-          resultSummary: `Invoked store.updateOrderStatus('${orderId}', '${statusTarget}')`
-        });
-
-        const updatedOrder = store.updateOrderStatus(orderId, statusTarget);
-        if (updatedOrder) {
-          return {
-            text: `✅ **Order ${orderId} Successfully Updated!**\nNew Status is set to **${statusTarget}**. Live WebSocket alert broadcasted to connected clients.`,
-            intent: 'ORDER_UPDATE',
-            toolCallsExecuted: toolCalls,
-            payload: { order: updatedOrder }
-          };
-        }
-      }
-    }
-
-    // 3. PRODUCT RECOMMENDATIONS INTENT
-    if (text.includes('recommend') || text.includes('suggest') || text.includes('best') || text.includes('top rated') || text.includes('popular')) {
-      toolCalls.push({
-        toolName: 'recommendProducts',
-        parameters: { limit: 3, queryContext: userMessage },
-        resultSummary: 'Invoked store.searchProducts() with rating > 4.6 filter'
-      });
-
-      const products = store.getAllProducts().filter(p => p.rating >= 4.6).slice(0, 3);
       return {
-        text: `✨ **Here are our Top AI-Recommended Products for you:**\nBased on popular customer ratings and quality verification:`,
-        intent: 'RECOMMENDATION',
-        toolCallsExecuted: toolCalls,
-        payload: { recommendations: products }
+        reply: `✅ Successfully cancelled Order **#${order.id}**! All items have been restored to warehouse stock, and a full refund of **$${order.totalAmount.toFixed(2)}** has been initiated.`,
+        toolExecuted: 'cancelOrder',
+        toolOutput: { order, refund },
+        confidence: 0.98
+      };
+    } catch (err: any) {
+      return {
+        reply: `⚠️ Unable to cancel Order **#${orderId}**: ${err.message}`,
+        toolExecuted: 'cancelOrder',
+        toolOutput: { error: err.message, orderId },
+        confidence: 0.95
+      };
+    }
+  }
+
+  // 2. ORDER LOOKUP TOOL
+  if (q.includes('order') || q.includes('track') || q.includes('where is') || q.includes('delivery') || q.match(/ord-\d+/i)) {
+    const orderMatch = query.match(/ORD-\d+/i) || query.match(/\b\d{4}\b/);
+    let targetOrder: Order | null = null;
+
+    if (orderMatch) {
+      const orderId = orderMatch[0].startsWith('ORD-') ? orderMatch[0].toUpperCase() : `ORD-${orderMatch[0]}`;
+      targetOrder = await db.findOrderById(orderId);
+    } else if (context?.userId) {
+      const userOrders = await db.getOrders(context.userId);
+      if (userOrders.length > 0) targetOrder = userOrders[0];
+    } else {
+      const allOrders = await db.getOrders();
+      if (allOrders.length > 0) targetOrder = allOrders[0];
+    }
+
+    if (targetOrder) {
+      const itemsList = targetOrder.items.map(i => `${i.quantity}x ${i.productName}`).join(', ');
+      return {
+        reply: `📦 Order **#${targetOrder.id}** is currently **${targetOrder.status}** (Step ${targetOrder.trackingStep + 1}/5). Estimated delivery is **${targetOrder.estimatedDelivery}** via **${targetOrder.carrier}**. Items: ${itemsList}.`,
+        toolExecuted: 'lookupOrder',
+        toolOutput: targetOrder,
+        confidence: 0.96
       };
     }
 
-    // 4. INTELLIGENT PRODUCT SEARCH INTENT
-    const isProductSearch = text.includes('find') || text.includes('search') || text.includes('show') || text.includes('buy') || text.includes('looking for') || text.includes('under') || text.includes('headphone') || text.includes('monitor') || text.includes('shoe') || text.includes('sweater') || text.includes('keyboard') || text.includes('backpack');
-
-    if (isProductSearch || text.length > 3) {
-      // Parse price extraction e.g. "under 100" or "under $150"
-      const priceMatch = text.match(/(under|less than|below|\$)\s*\$?(\d+)/i);
-      const maxPrice = priceMatch ? parseFloat(priceMatch[2]) : undefined;
-
-      // Execute Tool 3: searchProducts API
-      toolCalls.push({
-        toolName: 'searchProducts',
-        parameters: { query: userMessage, maxPrice },
-        resultSummary: `Invoked store.searchProducts('${userMessage}', maxPrice: ${maxPrice ?? 'none'})`
-      });
-
-      let products = store.searchProducts(userMessage, maxPrice);
-
-      // Fallback search if strict text didn't return matches
-      if (products.length === 0) {
-        if (text.includes('headphone') || text.includes('audio') || text.includes('sound')) {
-          products = store.searchProducts('Headphones', maxPrice);
-        } else if (text.includes('monitor') || text.includes('display') || text.includes('screen') || text.includes('gaming')) {
-          products = store.searchProducts('Monitor', maxPrice);
-        } else if (text.includes('clothing') || text.includes('wear') || text.includes('coat') || text.includes('jacket') || text.includes('sweater')) {
-          products = store.searchProducts('Sweater', maxPrice);
-        } else if (text.includes('shoe') || text.includes('sneaker') || text.includes('run')) {
-          products = store.searchProducts('Shoes', maxPrice);
-        } else if (text.includes('bag') || text.includes('hiking') || text.includes('travel')) {
-          products = store.searchProducts('Backpack', maxPrice);
-        } else if (text.includes('keyboard') || text.includes('key')) {
-          products = store.searchProducts('Keyboard', maxPrice);
-        } else {
-          products = store.getAllProducts().slice(0, 3);
-        }
-      }
-
-      const count = products.length;
-      const priceText = maxPrice ? ` under $${maxPrice}` : '';
-
-      return {
-        text: `🔍 **Found ${count} Product${count !== 1 ? 's' : ''} matching your search${priceText}:**`,
-        intent: 'PRODUCT_SEARCH',
-        toolCallsExecuted: toolCalls,
-        payload: { products }
-      };
-    }
-
-    // 5. STORE POLICY & GENERAL HELP INTENT
-    if (text.includes('return') || text.includes('policy') || text.includes('refund')) {
-      return {
-        text: `🛡️ **Return Policy:**\n${STORE_POLICIES.returnPolicy}`,
-        intent: 'STORE_POLICY',
-        toolCallsExecuted: [],
-        payload: { policy: STORE_POLICIES }
-      };
-    }
-
-    if (text.includes('shipping') || text.includes('delivery time') || text.includes('how fast')) {
-      return {
-        text: `🚚 **Shipping Information:**\n${STORE_POLICIES.shippingInfo}`,
-        intent: 'STORE_POLICY',
-        toolCallsExecuted: [],
-        payload: { policy: STORE_POLICIES }
-      };
-    }
-
-    // Default Fallback
     return {
-      text: `👋 Hello! I am your **Binary Brain Autonomous AI Assistant**. I can help you with:\n\n1. 📦 **Natural Language Order Lookup**: Ask *"Where is my order ORD-1001?"*\n2. 🔍 **Intelligent Product Search**: Ask *"Find noise-canceling headphones under $200"*\n3. ✨ **AI Recommendations**: Ask *"Recommend top tech accessories for gaming"*\n4. 🚚 **Live Order Updates**: Track real-time shipment status & carrier history.\n\nWhat can I assist you with today?`,
-      intent: 'GENERAL',
-      toolCallsExecuted: []
+      reply: 'I could not find an order matching that ID. Please check your order reference number (e.g. `ORD-8921`).',
+      toolExecuted: 'lookupOrder',
+      toolOutput: null,
+      confidence: 0.85
     };
   }
-}
 
-export const aiAgentEngine = new AIAgentEngine();
+  // 3. INVENTORY TELEMETRY & LOW STOCK TOOL
+  if (q.includes('stock') || q.includes('inventory') || q.includes('warehouse') || q.includes('depletion')) {
+    const telemetry = await db.getInventoryTelemetry();
+    if (q.includes('low') || q.includes('alert') || q.includes('critical') || q.includes('warning')) {
+      const low = telemetry.lowStockItems;
+      if (low.length > 0) {
+        const names = low.map(p => `• **${p.name}** (Stock: ${p.stock}, Threshold: ${p.minStockThreshold})`).join('\n');
+        return {
+          reply: `⚠️ **Inventory Telemetry Alert**: Found ${low.length} product(s) below threshold:\n${names}\n\nAutomated supplier restock orders have been queued.`,
+          toolExecuted: 'checkInventoryTelemetry',
+          toolOutput: telemetry,
+          confidence: 0.95
+        };
+      }
+      return {
+        reply: `🟢 All inventory stock levels are currently healthy! Total units in stock: **${telemetry.totalUnitsInStock}**.`,
+        toolExecuted: 'checkInventoryTelemetry',
+        toolOutput: telemetry,
+        confidence: 0.92
+      };
+    }
+
+    return {
+      reply: `📊 **Warehouse Overview**: ${telemetry.totalProducts} active products, ${telemetry.totalUnitsInStock} total units in stock. Overall Inventory Health Score is **${telemetry.healthScore}**.`,
+      toolExecuted: 'checkInventoryTelemetry',
+      toolOutput: telemetry,
+      confidence: 0.9
+    };
+  }
+
+  // 4. PRODUCT RECOMMENDATION & SEARCH TOOL
+  if (
+    q.includes('headset') ||
+    q.includes('chip') ||
+    q.includes('sensor') ||
+    q.includes('drone') ||
+    q.includes('wearable') ||
+    q.includes('under') ||
+    q.includes('price') ||
+    q.includes('recommend') ||
+    q.includes('product') ||
+    q.includes('buy')
+  ) {
+    let maxPrice: number | undefined;
+    const priceMatch = query.match(/\$?\s?(\d+)/);
+    if (q.includes('under') && priceMatch) {
+      maxPrice = parseInt(priceMatch[1], 10);
+    }
+
+    let category: string | undefined;
+    if (q.includes('neural') || q.includes('headset') || q.includes('bci') || q.includes('glove')) category = 'neural';
+    if (q.includes('chip') || q.includes('tensor') || q.includes('crypto')) category = 'chips';
+    if (q.includes('wearable') || q.includes('visor') || q.includes('ring')) category = 'wearables';
+    if (q.includes('sensor') || q.includes('lidar')) category = 'sensors';
+    if (q.includes('drone') || q.includes('uav')) category = 'drones';
+
+    const { products } = await db.getProducts({
+      category,
+      maxPrice,
+      sort: 'rating',
+      limit: 3
+    });
+
+    if (products.length > 0) {
+      const prodsList = products.map(p => `• **${p.name}** ($${p.price}) — ${p.rating}★ rating (${p.stock} in stock)`).join('\n');
+      return {
+        reply: `Here are our top recommended hardware products matching your search:\n${prodsList}`,
+        toolExecuted: 'searchProducts',
+        toolOutput: products,
+        confidence: 0.94
+      };
+    }
+  }
+
+  // 5. STORE POLICY & CANCELLATION RULES
+  if (q.includes('policy') || q.includes('refund') || q.includes('return') || q.includes('shipping fee')) {
+    return {
+      reply: `📋 **Binary-Brain Store Policies**:\n• **Order Cancellations:** Orders in *Processing* or *Pending* status can be cancelled instantly with automated full refunds.\n• **Shipping:** Free drone delivery on orders over $500. Standard shipping is $25.\n• **Warranty:** All neural hardware and edge AI chips include a 2-year warranty with 24/7 telemetry support.`,
+      toolExecuted: 'getStorePolicy',
+      toolOutput: { cancellationWindow: 'Before dispatch', warrantyYears: 2, freeShippingThreshold: 500 },
+      confidence: 0.95
+    };
+  }
+
+  // Default Conversational Answer
+  return {
+    reply: `I have analyzed your query: "${query}". As Binary-Brain's Autonomous Agent, I can help you search hardware, check inventory telemetry, track orders, or instantly cancel orders eligible for refund. What would you like me to do?`,
+    toolExecuted: null,
+    toolOutput: null,
+    confidence: 0.8
+  };
+}

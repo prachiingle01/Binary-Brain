@@ -1,124 +1,174 @@
-# 🤖 Binary Brain — Autonomous Agentic E-Commerce System
+# 🤖 Binary Brain — Autonomous Agentic E-Commerce & Inventory Ecosystem
 
 > **Authors:** Prachi Ingle • Payal Itankar • Bhagyashri Khanke  
-> **Tech Stack:** Node.js • Express • Socket.IO • React • Vite • TypeScript • Tailwind CSS • Docker • Vitest • GitHub Actions
+> **Tech Stack:** Node.js • Express • PostgreSQL • Socket.IO • TypeScript • Vitest • Docker & Docker Compose
 
 ---
 
-## 🌟 Key Features
+## 🌟 Core System Architecture
 
-1. **🤖 AI Customer Assistant**:
-   - Natural-language query parsing and tool execution state machine.
-   - Context-aware answers for store policies, products, and order statuses.
-2. **📦 Natural-Language Order Lookup**:
-   - Instant order resolution via queries like `"Where is my order ORD-1001?"` or `"Check tracking for package 1002"`.
-   - Returns order status, carrier info (`FedEx`, `UPS`, `DHL`), tracking codes, and step-by-step progress nodes.
-3. **🔍 Intelligent Product Search & AI Recommendations**:
-   - Semantic natural language matching (e.g. `"Show wireless noise canceling headphones under $200"`).
-   - Ranked product search results with price range filters and AI recommendation cards.
-4. **📡 Real-Time WebSocket AI Chat**:
-   - Bi-directional Socket.IO stream with typing indicators and tool execution feedback (`⚡ Executing tool: lookupOrder`).
-5. **🚚 Live Order-Status Updates & Notifications**:
-   - Built-in **Admin Event Simulator** allowing status transitions (`Pending` ➔ `Processing` ➔ `Shipped` ➔ `Out for Delivery` ➔ `Delivered`).
-   - Real-time room broadcasts push live timeline node updates and toast alerts across all connected clients.
-6. **🐳 Docker & Docker Compose Containerization**:
-   - Single-command orchestration via `docker compose up --build`.
-7. **🧪 Automated Test Suite & GitHub Actions CI**:
-   - Comprehensive API and AI tool execution tests written in Vitest.
-   - GitHub Actions workflow (`.github/workflows/ci.yml`) enforcing automated test verification on every commit.
-
----
-
-## 🏗️ Architecture Overview
+Binary-Brain is an enterprise-grade autonomous agentic e-commerce platform with real-time inventory telemetry, automated order cancellation logic, payment processing, role-based authentication, and conversational AI tool execution.
 
 ```
-                          ┌─────────────────────────────────────┐
-                          │     React + Vite Frontend (UI)      │
-                          │ - Glassmorphic Product Catalog      │
-                          │ - Live Order Timeline Tracker       │
-                          │ - Admin Status Event Simulator      │
-                          │ - WebSocket AI Assistant Chat       │
-                          └──────────────────┬──────────────────┘
-                                             │ (REST & WebSockets)
-                                             ▼
-                          ┌─────────────────────────────────────┐
-                          │   Node.js + Express Backend API     │
-                          │ - Socket.IO Server (Live Push)      │
-                          │ - AI Tool Execution Engine          │
-                          │ - In-Memory Store Manager           │
-                          └─────────────────────────────────────┘
+                                 ┌──────────────────────────────────────────────┐
+                                 │            Client Layer (Web UI)            │
+                                 │   - Glassmorphic Neural Product Catalog     │
+                                 │   - Multi-facet Filters & Live Search       │
+                                 │   - Real-time Order Tracker & Cancel UI     │
+                                 │   - Admin Telemetry & Restocking Portal     │
+                                 │   - WebSocket AI Assistant Companion        │
+                                 └──────────────────────┬───────────────────────┘
+                                                        │ (REST + Socket.IO)
+                                                        ▼
+                                 ┌──────────────────────────────────────────────┐
+                                 │        Express.js Backend API Server         │
+                                 │   - JWT Auth & Role-Based Access Control    │
+                                 │   - Cart & CartItem Engine                  │
+                                 │   - Atomic Checkout & Stock Deduction       │
+                                 │   - Cancellation & Stock Restoration Engine │
+                                 │   - Payment Intent & Refund Gateway         │
+                                 │   - Socket.IO Bi-directional Room Broadcast │
+                                 └──────────────────────┬───────────────────────┘
+                                                        │
+                                                        ▼
+                                 ┌──────────────────────────────────────────────┐
+                                 │     PostgreSQL Database (or In-Memory)       │
+                                 │   - users, categories, products             │
+                                 │   - carts, cart_items                       │
+                                 │   - orders, order_items                     │
+                                 │   - inventory_logs, payments                │
+                                 └──────────────────────────────────────────────┘
+```
+
+---
+
+## 🗄️ PostgreSQL Database Design
+
+The database schema (`backend/src/db/schema.sql`) implements 8 core relational tables with foreign keys, indexes, check constraints, and triggers:
+
+1. **`users`**: Customer & administrator accounts, hashed credentials, loyalty points, and role permissions (`customer` | `admin`).
+2. **`categories`**: Product taxonomy (`neural`, `chips`, `wearables`, `sensors`, `drones`).
+3. **`products`**: Tech/hardware catalog with real-time stock levels, min-stock alert thresholds, price, ratings, specs (JSONB), and AI insights.
+4. **`carts` & `cart_items`**: User and session-bound shopping carts with quantity tracking.
+5. **`orders` & `order_items`**: Relational order records with customer details, financials (subtotal, tax, shipping, discount), status transitions, delivery steps, tracking IDs, and cancellation eligibility flags.
+6. **`inventory_logs`**: Complete audit trail recording every stock mutation (`ORDER_FULFILLMENT`, `ORDER_CANCELLATION`, `MANUAL_RESTOCK`, `SUPPLIER_RESTOCK`, `ADJUSTMENT`) with previous & new stock counts.
+7. **`payments`**: Payment records tracking transaction IDs, status (`Pending`, `Completed`, `Refunded`), payment methods, and gateways.
+
+---
+
+## 📡 REST API Reference
+
+### 1. 🔐 Authentication & User Management
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/register` | Public | Register new customer or admin account |
+| `POST` | `/api/auth/login` | Public | Authenticate user & return JWT token |
+| `GET` | `/api/auth/me` | Authenticated | Retrieve current user profile & loyalty credits |
+| `PUT` | `/api/auth/profile` | Authenticated | Update user name, address, and contact info |
+| `GET` | `/api/users/users` | Admin | List all registered users and order counts |
+| `GET` | `/api/users/users/:id` | Admin | Retrieve user details with order history |
+
+### 2. 🏷️ Categories & Products
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/categories` | Public | List all categories with product counts |
+| `POST` | `/api/categories` | Admin | Create a new category |
+| `GET` | `/api/products` | Public | Filter products by `search`, `category`, `minPrice`, `maxPrice`, `minRating`, `inStock`, `sort`, `page`, `limit` |
+| `GET` | `/api/products/:id` | Public | Get product details, specs, and recent inventory logs |
+| `POST` | `/api/products` | Admin | Create a new product with stock and min-threshold |
+| `PUT` | `/api/products/:id` | Admin | Update product information and stock levels |
+| `DELETE` | `/api/products/:id` | Admin | Soft-delete / deactivate product |
+
+### 3. 🛒 Shopping Cart
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/cart` | Public / Auth | Get current cart with computed subtotal, tax, shipping, and total |
+| `POST` | `/api/cart/items` | Public / Auth | Add product to cart (validates available stock) |
+| `PUT` | `/api/cart/items/:productId` | Public / Auth | Update quantity of a cart item |
+| `DELETE` | `/api/cart/items/:productId` | Public / Auth | Remove item from cart |
+| `DELETE` | `/api/cart` | Public / Auth | Clear all items in cart |
+
+### 4. 📦 Orders & Cancellation Logic
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/orders` | Public / Auth | Checkout: validates stock, deducts stock atomically, creates order + order items, logs inventory, emits WebSocket event |
+| `GET` | `/api/orders` | Public / Auth | List orders for current user (or all if admin) |
+| `GET` | `/api/orders/:orderId` | Public / Auth | Retrieve order tracking timeline, items, and status |
+| `POST` | `/api/orders/:orderId/cancel` | Public / Auth | **Cancel Order**: checks eligibility (`Processing`/`Pending`), restores product stock, creates inventory cancellation log, issues refund, and emits WebSocket event |
+| `PATCH` | `/api/orders/:orderId/status` | Admin | Progress order status (`Processing` ➔ `Shipped` ➔ `Out for Delivery` ➔ `Delivered`) |
+
+### 5. 📊 Inventory Telemetry & Management
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/inventory/status` | Public / Admin | Real-time telemetry, low-stock warnings, and health score |
+| `POST` | `/api/inventory/restock` | Admin / Supplier | Restock product stock (+units), log reason, emit WebSocket alert |
+| `GET` | `/api/inventory/logs` | Admin | Full audit log of all stock movements |
+
+### 6. 💳 Payments
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/payments/create-intent` | Public / Auth | Create Stripe / CyberPay payment intent |
+| `POST` | `/api/payments/confirm` | Public / Auth | Confirm & capture payment transaction |
+| `POST` | `/api/payments/refund` | Public / Auth | Issue refund for order |
+
+### 7. 📈 Admin Sales & Analytics
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/admin/dashboard` | Admin | Revenue KPI, active orders, low stock items, top selling products |
+| `GET` | `/api/admin/sales-report` | Admin | Sales breakdown by status, category, and date |
+
+### 8. 🤖 AI Agent Assistant
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/ai/query` | Public | Conversational assistant with tool execution for order tracking, stock alerts, cancellation, and product search |
+
+---
+
+## 🚫 Order Cancellation Engine Logic
+
+```
+User / AI requests cancellation (POST /api/orders/:orderId/cancel)
+                          │
+                          ▼
+            Is Order in DB & Accessible? ────► [No] ➔ Return 404
+                          │
+                         [Yes]
+                          ▼
+            Is Status "Pending" or "Processing"?
+                   │                 │
+                 [No]              [Yes]
+                   │                 │
+                   ▼                 ▼
+          Return 400 Error     1. For each OrderItem:
+     (Order cannot be cancelled    - Atomic Product.stock += item.quantity
+      once Shipped / Delivered)    - Insert into inventory_logs (ORDER_CANCELLATION)
+                               2. Set Order.status = "Cancelled"
+                               3. Set Order.paymentStatus = "Refunded"
+                               4. Update Payment record (Status = "Refunded")
+                               5. Broadcast WebSocket 'order:cancelled' event
+                               6. Return success confirmation with refund receipt
 ```
 
 ---
 
 ## 🚀 Quick Start (Local Development)
 
-### Option 1: Running with Node.js & NPM
-
-1. **Start Backend API & WebSocket Server:**
-   ```bash
-   cd backend
-   npm install
-   npm run dev
-   ```
-   *Backend runs at:* `http://localhost:5000`
-
-2. **Start Frontend Web Application:**
-   ```bash
-   cd frontend
-   npm install
-   npm run dev
-   ```
-   *Frontend runs at:* `http://localhost:3000`
-
----
-
-### Option 2: Running with Docker Compose 🐳
-
-To launch both frontend and backend in unified isolated containers:
-
+### 1. Run with Node.js:
 ```bash
-docker compose up --build
+cd backend
+npm install
+npm run dev
 ```
+*Backend runs on `http://localhost:5000`*
 
-- **Frontend App:** `http://localhost:3000`
-- **Backend API:** `http://localhost:5000`
-
----
-
-## 🧪 Automated Testing
-
-Run the automated Vitest test suite covering product search APIs, order tracking logic, order status updates, and AI tool execution:
-
+### 2. Run Automated Tests:
 ```bash
 cd backend
 npm test
 ```
 
----
-
-## 📡 API Reference Endpoint Summary
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/health` | Healthcheck & uptime check |
-| `GET` | `/api/products` | Search products with query, maxPrice, category filters |
-| `GET` | `/api/products/:id` | Retrieve product details by ID |
-| `GET` | `/api/orders` | Retrieve list of sample customer orders |
-| `GET` | `/api/orders/:orderId` | Natural-language order lookup by ID (e.g. `ORD-1001`) |
-| `PATCH` | `/api/orders/:orderId/status` | Update order status and trigger live WebSocket push |
-| `POST` | `/api/ai/query` | REST fallback endpoint for AI query processing & tool calling |
-
----
-
-## 🚢 Deployment Guide
-
-### Deploying Backend
-The backend is packaged into a production-ready Node.js container (`backend/Dockerfile`). Deploy to platforms like **Render**, **Fly.io**, **Railway**, or **AWS ECS**:
+### 3. Run with Docker Compose 🐳:
 ```bash
-docker build -t binary-brain-backend ./backend
-docker run -p 5000:5000 binary-brain-backend
+docker compose up --build
 ```
-
-### Deploying Frontend
-The frontend builds optimized static assets into `/dist` via Vite and serves them using Nginx (`frontend/Dockerfile`). Deploy directly to **Vercel**, **Netlify**, or container registries.
+*Spins up PostgreSQL container and backend API container.*

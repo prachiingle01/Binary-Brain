@@ -1,20 +1,17 @@
 import { Request, Response } from 'express';
-import { aiAgentEngine } from '../services/aiAgent';
+import { executeAgentQuery } from '../services/aiAgent';
 
-export const processAIQuery = async (req: Request, res: Response) => {
+export async function processAIQuery(req: Request, res: Response) {
   try {
-    const { query } = req.body;
-    if (!query || typeof query !== 'string') {
-      return res.status(400).json({ success: false, error: 'A valid text query string is required.' });
+    const { query, context } = req.body;
+
+    if (!query) {
+      return res.status(400).json({ error: 'Query is required for AI agent processing.' });
     }
 
-    const response = await aiAgentEngine.processUserMessage(query);
-
-    res.json({
-      success: true,
-      data: response
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, error: error.message });
+    const result = await executeAgentQuery(query, context);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
   }
-};
+}
